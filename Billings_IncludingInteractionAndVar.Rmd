@@ -1,0 +1,337 @@
+---
+title: "Fit model including interaction term"
+author: "gtbil"
+data: 05/25/2021
+output:
+  html_document:
+    df_print: paged
+---
+
+# Load our packages
+```{r setup, include=TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, 
+                      root.dir = "I:/My Drive/Grant_Billings_SharedWorkingFolder/Cotton_Fineness-vs-Morphology_Project/analysis")
+library(tidyverse)
+library(brms)
+library(emmeans)
+library(tidybayes)
+
+# remotes::install_github("m-clark/visibly")
+# remotes::install_github("stan-dev/cmdstanr")
+library(visibly)
+
+options(mc.cores=4, brms.backend='cmdstanr', brms.file_refit='on_change')
+```
+
+# fit the model that includes Method and Method x Genotype interaction in one plot
+Let's test our working model with the real data from the ML.
+```{r, real data}
+data.HumVsML <- read.csv("../data/eval_results_human_AI_5_2_22_model_iter_600_with_AP_64.0050.csv",
+                 check.names = FALSE)[, c(1, 2, 3, 4, 9, 10)] %>%
+  pivot_longer(., cols = c(Human_PercT, ML_PercT), 
+               names_to = "Method", values_to = "propT") %>%
+  mutate(., "propH" = 1 - propT) %>%
+  subset(., select = -c(propT)) %>%
+  separate(., "Method", into = c("Method", "notImportant")) %>%
+  select(., -notImportant) %>%
+  mutate(., "nFibers" = ifelse(Method == "Human", HumanTotal, MLTotal)) %>%
+  select(., -c(HumanTotal, MLTotal)) %>%
+  mutate(., "nHemisphere" = as.integer(propH * nFibers))
+
+fullmod.fit <- brm(nHemisphere | trials(nFibers) ~ Genotype + Method + Method:Genotype + (1 + Method | ImageName),
+           data = data.HumVsML, family = binomial,
+           prior = c(prior(normal(0, 3), class = 'b')),
+           chains = 4, iter = 2000, warmup = 1000, seed = 1789749,
+           file = './simFibers/fullmod_fit')
+
+fullmod.fit.nodifvar <- brm(nHemisphere | trials(nFibers) ~ Genotype + Method + Method:Genotype + (1 | ImageName),
+           data = data.HumVsML, family = binomial,
+           prior = c(prior(normal(0, 3), class = 'b')),
+           chains = 4, iter = 2000, warmup = 1000, seed = 9198167,
+           file = './simFibers/fullmod_fit_nodifvar')
+
+# add model fit criterion
+# loo fails, r session crash
+# fullmod.fit <- add_criterion(x = fullmod.fit, criterion = "loo", reloo = TRUE, moment_match = TRUE)
+# fm1 <- loo(fullmod.fit, moment_match = TRUE, reloo = TRUE)
+# fm2 <- loo(fullmod.fit.nodifvar, moment_match = TRUE, reloo = TRUE)
+# loo_compare(fm1, fm2)
+# fullmod.fit.nodifvar <- add_criterion(x = fullmod.fit.nodifvar, criterion = "loo", reloo = TRUE, moment_match = TRUE)
+
+# compare the two models
+# loo_compare(fullmod.fit, fullmod.fit.nodifvar, criterion = "loo")
+
+fullmod.fit <- add_criterion(fullmod.fit, criterion = "kfold")
+fullmod.fit.nodifvar <- add_criterion(fullmod.fit.nodifvar, criterion = "kfold")
+loo_compare(fullmod.fit, fullmod.fit.nodifvar, criterion = "kfold")
+
+# now lets try with loo
+fm1 <- loo(fullmod.fit, moment_match = TRUE, reloo = TRUE)
+fm2 <- loo(fullmod.fit.nodifvar, moment_match = TRUE, reloo = TRUE)
+fm1
+fm2
+loo_compare(fm1, fm2)
+
+summary(fullmod.fit)
+
+plot(fullmod.fit)
+
+# 26 observations are showing bad pareto K
+# try with moment matching
+# loo(fullmod.fit, moment_match = TRUE)
+
+# still have two outliers, which should be OK
+# performance::variance_decomposition(fullmod.fit)
+
+pp_check(fullmod.fit, x = "nFibers", type = "error_scatter_avg_vs_x", ndraws = 100)
+pp_check(fullmod.fit, type = "error_scatter_avg", ndraws = 100)
+
+# pp check looks great below!
+pp_check(fullmod.fit, ndraws = 100)
+pp_check(fullmod.fit.nodifvar, ndraws = 100)
+
+# is mode error related to sample size?
+pp_check(fullmod.fit, x = "nFibers", type = "error_scatter_avg_vs_x", ndraws = 100)
+
+#is error related to Genotype?
+pp_check(fullmod.fit, group = "Genotype", type = "error_scatter_avg_grouped", ndraws = 100)
+
+# model looks very similar to the previous plot
+conditional_effects(fullmod.fit)
+
+# it's clear here that some of the images contribute more to the variance that others, which is OK
+# there is going to be image to image variation, with some images deviating substantially
+# from the expected image effect, which is zero.
+visibly::plot_coefficients(fullmod.fit, keep_intercept= TRUE, trans = plogis, ranef = TRUE, which_ranef = "ImageName")
+summary(fullmod.fit)
+coef(fullmod.fit)$ImageName[,1,] %>% plogis %>% plot
+
+resids <- residuals(fullmod.fit)
+resids <- cbind(data.HumVsML, resids)
+resids <- resids[order(abs(resids$Estimate), decreasing = TRUE), ]
+resids$ImageName <- factor(resids$ImageName,
+                           ordered = TRUE,
+                           levels = unique(resids$ImageName))
+
+mean(abs(resids$Estimate))
+g <- ggplot(resids,
+       aes(x = ImageName, y = Estimate, color = Method,
+           size = nFibers)) +
+  geom_point(position = position_dodge(width = 0.5), alpha = 0.5) +
+  facet_wrap(~Genotype, scale = "free_x") +
+  theme(axis.text.x = element_text(angle = 90))  +
+  ylim(-7.5, 7.5)
+
+# plot the same data, but this type nHemisphere
+g2 <- ggplot(resids,
+       aes(x = ImageName, y = propH, color = Method,
+           size = nFibers)) +
+  geom_point(position = position_dodge(width = 0.5), alpha = 0.5) +
+  facet_wrap(~Genotype, scale = "free_x") +
+  theme(axis.text.x = element_text(angle = 90))
+
+resids %>%
+  group_by(., Genotype, Method) %>%
+  summarize(., mean_resid = mean(Estimate)) %>%
+  data.frame() %>%
+  pivot_wider(., names_from = Method, values_from = mean_resid)
+
+
+### do we get the same result for the other model?
+resids <- residuals(fullmod.fit.nodifvar)
+resids <- cbind(data.HumVsML, resids)
+resids <- resids[order(abs(resids$Estimate), decreasing = TRUE), ]
+resids$ImageName <- factor(resids$ImageName,
+                           ordered = TRUE,
+                           levels = unique(resids$ImageName))
+mean(abs(resids$Estimate))
+g <- ggplot(resids,
+       aes(x = ImageName, y = Estimate, color = Method,
+           size = nFibers)) +
+  geom_point(position = position_dodge(width = 0.5), alpha = 0.5) +
+  facet_wrap(~Genotype, scale = "free_x") +
+  theme(axis.text.x = element_text(angle = 90)) +
+  ylim(-7.5, 7.5)
+
+# plot the same data, but this type nHemisphere
+g2 <- ggplot(resids,
+       aes(x = ImageName, y = propH, color = Method,
+           size = nFibers)) +
+  geom_point(position = position_dodge(width = 0.5), alpha = 0.5) +
+  facet_wrap(~Genotype, scale = "free_x") +
+  theme(axis.text.x = element_text(angle = 90))
+```
+
+# Compare means and variances for ML and Human
+```{r, compare human vs ML}
+fullmod.fit.emm_genotypexmethod <- emmeans(fullmod.fit, ~ Method:Genotype)
+fullmod.fit.emm_draws <- gather_emmeans_draws(fullmod.fit.emm_genotypexmethod) %>%
+  mutate(.value = plogis(.value))
+
+# summarize
+# summary values at the interaction are essentially the same
+fullmod.fit.emm_draws %>%
+  group_by(Genotype, Method) %>%
+  summarize(., mean = mean(.value)) %>%
+  as.data.frame(.) %>%
+  pivot_wider(., names_from = Method, values_from = mean)
+
+# get the confidence intervals and compare between methods
+fullmod.fit.emm_genotypexmethod %>% data.frame %>%
+  mutate(, upper.HPD = plogis(upper.HPD), lower.HPD = plogis(lower.HPD)) %>%
+  mutate(., width = upper.HPD - lower.HPD) %>% 
+  select(., Method, Genotype, width) %>%
+  pivot_wider(., names_from = Method, values_from = width)
+
+```
+
+# Try again with a subset of 12 images from each
+```{r, 12 img subset}
+# select 12 images for each
+all.imgs <- unique(data.HumVsML)
+set.seed(341651)
+subset.imgs <- all.imgs %>%
+  select(., ImageName) %>%
+  distinct() %>%
+  separate(., ImageName, into = c("line", "name"), remove = FALSE)
+# get our groups to pick
+keep_vec <- character(length = nrow(subset.imgs)/2)
+counter <- 1
+for (this.line in unique(subset.imgs$line)) {
+  subset.imgs.this <- subset(subset.imgs, subset = line == this.line)
+  subset.keep <- sample(subset.imgs.this$ImageName, size = nrow(subset.imgs.this)/2)
+  keep_vec[counter:(counter + nrow(subset.imgs.this)/2 -1)] <- subset.keep
+  counter <- counter + nrow(subset.imgs.this)/2
+}
+data.HumVsML.12 <- subset(data.HumVsML, subset = ImageName %in% keep_vec)
+```
+# Now run the model again
+```{r, 12 img model}
+fullmod.12.fit <- brm(nHemisphere | trials(nFibers) ~ Genotype + Method + Method:Genotype + (1 + Method | ImageName), 
+           data = data.HumVsML.12, family = binomial,
+           prior = c(prior(normal(0, 3), class = 'b')),
+           chains = 4, iter = 2000, warmup = 1000, seed = 87756,
+           file = './simFibers/fullmod_12_fit')
+
+# having issues with 49/5 high Pareto_K
+# double check with loo (slower) moment_matching=TRUE
+# still have some Pareto k values (outliers!)
+# we had issues with high pareto_k, so just refit model for these observations
+# mod3.Human.fit <- add_criterion(mod3.Human.fit, "loo", k_theshold = 0.7, moment_match = TRUE)
+
+summary(fullmod.12.fit)
+```
+
+```{r, extract means from 12}
+fullmod.12.fit.emm_genotypexmethod <- emmeans(fullmod.12.fit, ~ Method:Genotype)
+fullmod.12.fit.emm_draws <- gather_emmeans_draws(fullmod.12.fit.emm_genotypexmethod) %>%
+  mutate(.value = plogis(.value))
+
+# summarize
+# summary values at the interaction are essentially the same
+fullmod.12.fit.emm_draws %>%
+  group_by(Genotype, Method) %>%
+  summarize(., mean = mean(.value)) %>%
+  as.data.frame(.) %>%
+  pivot_wider(., names_from = Method, values_from = mean)
+
+fullmod.12.fit.emm_genotypexmethod %>% data.frame %>%
+  mutate(, upper.HPD = plogis(upper.HPD), lower.HPD = plogis(lower.HPD)) %>%
+  mutate(., width = upper.HPD - lower.HPD) %>% 
+  select(., Method, Genotype, width) %>%
+  pivot_wider(., names_from = Method, values_from = width)
+```
+# Make the other plot
+```{r, fig2, fig.width = 12, fig.height = 4, fig.align = "center"}
+fullmod.both.12and24.emm_draws <- rbind(add_column(fullmod.12.fit.emm_draws,
+                                                "n_sample" = "12 images"),
+                                     add_column(fullmod.fit.emm_draws,
+                                                "n_sample" = "24 images"))
+# this seemed to have worked!!
+ggplot(fullmod.both.12and24.emm_draws, 
+       aes(y = Genotype, x = .value, group = Method, color = Method)) +
+  stat_pointinterval(position = position_dodge(width = 0.4)) +
+  theme_tidybayes() +
+  xlim(0, 1) +
+  theme(text = element_text(size = 18)) +
+  xlab("Probability of a Single Fiber Being Hemisphere") +
+  facet_wrap(~n_sample)
+
+# now make the publication plot
+
+fullmod.both.12and24.emm_draws.toplot <- fullmod.both.12and24.emm_draws
+fullmod.both.12and24.emm_draws.toplot$Genotype <- as.character(fullmod.both.12and24.emm_draws.toplot$Genotype) %>%
+  substr(., start = 7, stop = nchar(.))
+
+# add another variable with hirsutum vs barbadense
+fullmod.both.12and24.emm_draws.toplot$Species <- ifelse(fullmod.both.12and24.emm_draws.toplot$Genotype %in% c("Pima S7", "Pima 379", "Phytogen 800"),
+                                                     "Gb",
+                                                     "Gh")
+# this seemed to have worked!!
+# https://mjskay.github.io/ggdist/articles/dotsinterval.html
+g <- ggplot(fullmod.both.12and24.emm_draws.toplot, 
+       aes(y = Genotype, x = 1 - .value, group = Method, color = Method)) +
+  stat_pointinterval(position = position_dodge(width = 0.8), point_size = 1.5, 
+                     fill = "white", pch = 21, stroke = 0.5) +
+  scale_color_discrete(name = "Method", labels = c("Human", "Machine Learning")) +
+  guides(color = guide_legend(reverse = TRUE)) +
+  theme_tidybayes() +
+  xlim(0, 1) +
+  theme(text = element_text(size = 8)) +
+  xlab("Probability of a single fiber being tapered in sets of\n12 or 24 images of six cotton accessions") +
+  ylab("Accession") + 
+  facet_grid(Species~n_sample, scale = "free") +
+  theme(strip.text = element_blank(),
+        panel.spacing.x = unit(1.25, "lines"),
+        panel.spacing.y = unit(.75, "lines"),
+        panel.grid.major.x = element_blank(),
+        axis.title  = element_text(size = 8),
+        axis.text = element_text(size = 8,color = "black"),
+        legend.position = "bottom",
+        legend.text = element_text(size = 8,color = "black"),
+        legend.title =  element_blank(),
+        # legend.margin = margin(c(1,5,1,5)),
+        legend.margin=margin(t=-.35, r=0, b=0, l=0, unit="cm"),
+        # legend.spacing.y = unit(0, "mm")
+        # legend.box.background = element_rect(colour = 'black', fill = 'white', linetype='solid')
+          ) +
+  geom_label(data = data.frame(label = c("A", "B", "C", "D"),
+                      x = rep(0.05, 4),
+                      # y = c("Pima S7", "Pima S7",
+                      #       "Half and Half", "Half and Half"),
+                      y = rep(3.33, 4),
+                      Method = rep("Human", 4),
+                      n_sample = c("12 images", "24 images", "12 images", "24 images"),
+                      Species = c("Gb", "Gb", "Gh", "Gh")),
+            mapping = aes(x = x, y = y, label = label),
+            color = "black",
+            label.size = 0,
+            size = 3.25)
+ggsave(filename = "Figure4.tiff",
+       plot = g,
+       scale = 1,
+       dpi = 600,
+       width = 4.5, height = 3)
+g
+```
+
+# check predictive interval on our data
+What does the model think is a reasonable range for new data to fall into?
+```{r, pred int}
+# generate some new data to predict on:
+new_data <- subset(data.HumVsML.12, select = -c(propH, nHemisphere)) %>%
+  mutate(., ImageName = paste0(ImageName, 101), nFibers = floor(runif(nrow(.), 30, 120)))
+
+pp_interval <- cbind(new_data,
+                     predictive_interval(fullmod.fit,
+                                         newdata = new_data, 
+                                         allow_new_levels = TRUE))
+
+ggplot(pp_interval,
+       aes(x = ImageName, color = Method, group = Method)) +
+  geom_linerange(aes(ymin = `5%`/nFibers, ymax = `95%`/nFibers), inherit.aes = TRUE, position = position_dodge(width = 0.8)) +
+  theme(axis.text.x = element_blank()) +
+  ylab("Proportion Hemisphere Fibers") +
+  ylim(0,1) +
+  facet_wrap(~Genotype, scale = "free_x", nrow = 2)
