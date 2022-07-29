@@ -5,5 +5,4 @@ Description of files:
 * fit_R_model.Rmd/.html Bayesian analysis of fiber count data using a full factorial of Method and Accession and a group-level effect for images
 * cotton_vision.ipynb Jupyter notebook for the tip type detection model, including tuning and evaluation
 
-Raw Data Image files can be found at National Ag Library:
-
+Raw Data Image files can be found at National Ag Library: [https://data.nal.usda.gov/dataset/data-efficient-imaging-and-computer-vision-detection-two-cell-shapes-young-cotton-fibers](https://data.nal.usda.gov/dataset/data-efficient-imaging-and-computer-vision-detection-two-cell-shapes-young-cotton-fibers)
