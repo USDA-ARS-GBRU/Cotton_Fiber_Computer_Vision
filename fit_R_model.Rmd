@@ -11,7 +11,7 @@ output:
 ```{r setup, include=TRUE}
 knitr::opts_chunk$set(echo = TRUE)
 knitr::opts_chunk$set(echo = TRUE, 
-                      root.dir = "I:/My Drive/Grant_Billings_SharedWorkingFolder/Cotton_Fineness-vs-Morphology_Project/analysis")
+                      root.dir = R.utils::filePath("I:/My Drive/Grant_Billings_SharedWorkingFolder/Cotton_Fineness-vs-Morphology_Project/analysis", expandLinks = "any"))
 library(tidyverse)
 library(brms)
 library(emmeans)
@@ -27,7 +27,7 @@ options(mc.cores=4, brms.backend='cmdstanr', brms.file_refit='on_change')
 # fit the model that includes Method and Method x Genotype interaction in one plot
 Let's test our working model with the real data from the ML.
 ```{r, real data}
-data.HumVsML <- read.csv("../data/eval_results_human_AI_5_2_22_model_iter_600_with_AP_64.0050.csv",
+data.HumVsML <- read.csv("../data/greenhouse_per_image_results_2022-08-02_model_weights.csv",
                  check.names = FALSE)[, c(1, 2, 3, 4, 9, 10)] %>%
   pivot_longer(., cols = c(Human_PercT, ML_PercT), 
                names_to = "Method", values_to = "propT") %>%
